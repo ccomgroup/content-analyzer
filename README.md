@@ -2,10 +2,6 @@
 
 This Streamlit application combines powerful analysis capabilities for both YouTube videos and GitHub repositories. It provides automated transcription, summarization, and content analysis using AI.
 
-<p align="center">
-  <img src="logo.svg" alt="Content Analyzer Logo" width="100" height="100">
-</p>
-
 ## Features
 
 ### YouTube Analysis

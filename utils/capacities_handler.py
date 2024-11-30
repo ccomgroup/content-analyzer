@@ -13,82 +13,64 @@ class CapacitiesHandler:
         if not self.api_key or not self.space_id:
             raise ValueError("Missing Capacities credentials (API key or Space ID)")
 
-
         try:
-            # Prepare a short description
-            short_description = f"""YouTube Video Analysis: {results['info']['title']}
+            if results['type'] == 'github':
+                # Format GitHub README content
+                content = f"""# {results['info']['title']}
+
+{results['readme']}
+
+---
+Repository URL: {results['info']['url']}
+Analyzed on: {results.get('processed_date', 'Date not available')}"""
+
+                # Create a shorter description from the README (using cleaned content)
+                description_lines = results['readme'].split('\n')
+                description = next((line for line in description_lines if line.strip()), "No description available")
+                if len(description) > 997:  # Leave room for '...'
+                    description = description[:997] + "..."
+            else:
+                # Handle YouTube content (existing code)
+                description = f"""YouTube Video Analysis: {results['info']['title']}
 
 Summary: {results.get('summary', 'No summary available')[:500]}...
 
-Tags: {', '.join(self._generate_tags(results))}"""[:1000]  # Limit to 1000 characters
+Tags: {', '.join(self._generate_tags(results))}"""[:1000]
+                content = self._format_content(results)
 
-            # Prepare data according to documentation
+            # Prepare weblink data
             weblink_data = {
                 "spaceId": self.space_id,
-                "url": results.get('video_url', ''),
-                "titleOverwrite": f"Analysis: {results['info']['title']}"[:200],  # Limit title
-                "descriptionOverwrite": short_description,
-                "tags": self._generate_tags(results),
-                "mdText": self._format_content(results)  # Complete content in markdown
-            }
-
-            # Configure headers
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "Accept": "application/json"
+                "url": results['info']['url'],
+                "titleOverwrite": results['info']['title'][:200],  # Limit title
+                "descriptionOverwrite": description,
+                "mdText": content
             }
 
             # Debug info
             print("\nSending request to Capacities:")
-            endpoint = f"{self.base_url}/save-weblink"  # Endpoint correct according to docs
+            endpoint = f"{self.base_url}/save-weblink"
             print(f"URL: {endpoint}")
             print(f"Space ID: {self.space_id}")
-            print(f"Headers: {headers}")
-            print(f"Data: {json.dumps(weblink_data, indent=2)}")
 
             # Make the API request
             response = requests.post(
                 endpoint,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                    "accept": "application/json"
+                },
                 json=weblink_data,
-                headers=headers,
                 timeout=30
             )
 
-            # Debug response
-            print("\nCapacities response:")
-            print(f"Status Code: {response.status_code}")
-            print(f"Headers: {dict(response.headers)}")
-            print(f"Response: {response.text}")
-
-            # Verify response
-            if response.status_code == 400:
-                raise Exception("Invalid request. Check the sent data")
-            elif response.status_code == 401:
-                raise Exception("Authentication error. Check your API key")
-            elif response.status_code == 404:
-                raise Exception("Resource not found. Check the URL")
-            elif response.status_code == 429:
-                raise Exception("Too many requests. Wait a moment")
-            elif response.status_code not in [200, 201]:
+            # Handle response
+            if response.status_code == 200:
+                return {"status": "success", "url": response.json().get('url')}
+            else:
                 raise Exception(f"Capacities error ({response.status_code}): {response.text}")
-            
-            # Process response
-            try:
-                response_data = response.json()
-                weblink_id = response_data.get('id')
-                if weblink_id:
-                    return {
-                        "url": f"https://app.capacities.io/space/{self.space_id}/weblink/{weblink_id}",
-                        "id": weblink_id
-                    }
-                else:
-                    raise Exception("Weblink ID not received in the response")
-            except json.JSONDecodeError:
-                raise Exception(f"Error decoding JSON response: {response.text}")
 
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"Connection error with Capacities: {str(e)}")
         except Exception as e:
             raise Exception(f"Error creating weblink: {str(e)}")
 

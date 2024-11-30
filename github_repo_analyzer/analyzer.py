@@ -20,11 +20,22 @@ class GitHubRepoAnalyzer:
         Feature: README Retrieval
         Automatically extracts the content of README.md to provide an initial insight into the repository.
         """
-        response = requests.get(f"{self.base_url}/readme", headers=self.headers)
-        if response.status_code == 200:
-            content = base64.b64decode(response.json()["content"]).decode("utf-8")
-            return content
-        return None
+        try:
+            # Try to get the README file
+            response = requests.get(
+                f"{self.base_url}/readme",
+                headers=self.headers
+            )
+            
+            if response.status_code == 200:
+                content = response.json()["content"]
+                decoded_content = base64.b64decode(content).decode('utf-8')
+                return decoded_content
+            else:
+                return "README not found"
+                
+        except Exception as e:
+            raise Exception(f"Error fetching README: {str(e)}")
 
     def get_repo_structure(self) -> List[Dict[str, Any]]:
         """
