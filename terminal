@@ -1,0 +1,16 @@
+mkdir youtube-analyzer
+cd youtube-analyzer
+
+# Crear el ambiente virtual
+python -m venv venv
+
+# Activar el ambiente virtual
+# En Windows:
+venv\Scripts\activate
+# En macOS/Linux:
+source venv/bin/activate
+
+# Instalar las dependencias
+pip install -r requirements.txt 
+
+chmod +x run.sh

@@ -1,0 +1,12 @@
+requests
+python-dotenv
+openai>=1.0.0
+pydantic>=2.0.0
+pydantic-core>=2.0.0
+typing-extensions>=4.6.1
+streamlit
+yt-dlp
+GitPython
+pydub
+ffmpeg-python
+youtube-transcript-api
