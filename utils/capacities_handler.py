@@ -6,73 +6,99 @@ class CapacitiesHandler:
     def __init__(self, api_key):
         self.api_key = api_key
         self.space_id = os.getenv("CAPACITIES_SPACE_ID")
-        self.base_url = "https://api.capacities.io"  # URL base correcta
+        self.base_url = "https://api.capacities.io"
+        
+        if not self.api_key:
+            raise ValueError("Missing Capacities API key")
+        if not self.space_id:
+            raise ValueError("Missing CAPACITIES_SPACE_ID in environment variables")
+            
+        print(f"Initialized CapacitiesHandler with space_id: {self.space_id}")
+        
+        self.headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
 
     def create_weblink(self, results):
-        """Create a weblink in Capacities using the REST API"""
-        if not self.api_key or not self.space_id:
-            raise ValueError("Missing Capacities credentials (API key or Space ID)")
+        """Create a weblink in Capacities"""
+        if not results:
+            raise ValueError("No results provided")
+
+        # Get the URL based on the content type
+        if results['type'] == 'youtube':
+            url = results.get('info', {}).get('webpage_url') or results.get('info', {}).get('url')
+            if not url:
+                raise ValueError("No URL found in YouTube results")
+            title = results.get('info', {}).get('title', '')
+            description = results.get('summary', '')
+            tags = results.get('tags', [])
+            
+        elif results['type'] == 'github':
+            url = results.get('url')
+            if not url:
+                raise ValueError("No URL found in GitHub results")
+            title = results.get('repo_name', '')
+            description = results.get('summary', '')
+            tags = ["github", "repository", "documentation"]
+        else:
+            raise ValueError(f"Unsupported content type: {results['type']}")
+
+        # Prepare request body according to API docs
+        request_body = {
+            "space": self.space_id,
+            "source": {
+                "type": "url",
+                "value": url
+            },
+            "metadata": {
+                "title": title,
+                "description": description,
+                "tags": tags,
+                "content": description
+            }
+        }
+
+        # Log debugging information
+        print("\nCapacities API Debug Information:")
+        print(f"Space ID: {self.space_id}")
+        print(f"Base URL: {self.base_url}")
+        print("Headers:", json.dumps(self.headers, indent=2))
+        print("Request body:", json.dumps(request_body, indent=2))
+
+        # Make the API request to the correct endpoint
+        endpoint = f"{self.base_url}/v1/spaces/{self.space_id}/weblinks"
+        print(f"Full endpoint URL: {endpoint}")
 
         try:
-            if results['type'] == 'github':
-                # Format GitHub README content
-                content = f"""# {results['info']['title']}
-
-{results['readme']}
-
----
-Repository URL: {results['info']['url']}
-Analyzed on: {results.get('processed_date', 'Date not available')}"""
-
-                # Create a shorter description from the README (using cleaned content)
-                description_lines = results['readme'].split('\n')
-                description = next((line for line in description_lines if line.strip()), "No description available")
-                if len(description) > 997:  # Leave room for '...'
-                    description = description[:997] + "..."
-            else:
-                # Handle YouTube content (existing code)
-                description = f"""YouTube Video Analysis: {results['info']['title']}
-
-Summary: {results.get('summary', 'No summary available')[:500]}...
-
-Tags: {', '.join(self._generate_tags(results))}"""[:1000]
-                content = self._format_content(results)
-
-            # Prepare weblink data
-            weblink_data = {
-                "spaceId": self.space_id,
-                "url": results['info']['url'],
-                "titleOverwrite": results['info']['title'][:200],  # Limit title
-                "descriptionOverwrite": description,
-                "mdText": content
-            }
-
-            # Debug info
-            print("\nSending request to Capacities:")
-            endpoint = f"{self.base_url}/save-weblink"
-            print(f"URL: {endpoint}")
-            print(f"Space ID: {self.space_id}")
-
-            # Make the API request
             response = requests.post(
                 endpoint,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                    "accept": "application/json"
-                },
-                json=weblink_data,
+                headers=self.headers,
+                json=request_body,
                 timeout=30
             )
 
-            # Handle response
-            if response.status_code == 200:
-                return {"status": "success", "url": response.json().get('url')}
-            else:
-                raise Exception(f"Capacities error ({response.status_code}): {response.text}")
+            # Log the response
+            print(f"\nResponse Status: {response.status_code}")
+            print(f"Response Headers: {json.dumps(dict(response.headers), indent=2)}")
+            print(f"Response Body: {response.text}")
 
-        except Exception as e:
-            raise Exception(f"Error creating weblink: {str(e)}")
+            # Check if request was successful
+            if response.status_code in [200, 201]:
+                try:
+                    return response.json()
+                except Exception as e:
+                    print(f"Error parsing response JSON: {e}")
+                    return {"url": url}
+            else:
+                error_msg = f"API request failed with status {response.status_code}"
+                if response.text:
+                    error_msg += f": {response.text}"
+                raise Exception(error_msg)
+
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"Network error while calling Capacities API: {str(e)}")
 
     def _generate_tags(self, results):
         """Generate tags from the results"""
@@ -115,8 +141,13 @@ Tags: {', '.join(self._generate_tags(results))}"""[:1000]
 
 ## Main Chapters
 """
+        # Get chapters list, handling both old and new formats
+        chapters_list = results['chapters']
+        if isinstance(chapters_list, dict) and 'chapters' in chapters_list:
+            chapters_list = chapters_list['chapters']
+            
         # Add chapters
-        for chapter in results['chapters']['chapters'][:3]:
+        for chapter in chapters_list[:3]:
             content += f"\n- {chapter['timestamp']}: {chapter['title']}"
 
         # Add tags
@@ -126,4 +157,4 @@ Tags: {', '.join(self._generate_tags(results))}"""[:1000]
         # Add metadata
         content += f"\n\n---\nAnalyzed on: {results.get('processed_date', 'Date not available')}"
 
-        return content 
+        return content

@@ -141,7 +141,7 @@ class VideoProcessor:
                     "summary": summary
                 })
             
-            return {"chapters": chapters}
+            return chapters
         else:
             # Fallback to previous method if no timestamps
             response = await asyncio.to_thread(
@@ -152,7 +152,7 @@ class VideoProcessor:
                     {"role": "user", "content": f"Generate 3-5 chapters with timestamps for:\n\n{transcript[:4000]}"}
                 ]
             )
-            return {"chapters": [{"timestamp": "00:00", "title": "Start", "summary": response.choices[0].message.content}]}
+            return [{"timestamp": "00:00", "title": "Start", "summary": response.choices[0].message.content}]
 
     async def _generate_tags(self, transcript):
         """Generate relevant tags"""
@@ -229,7 +229,8 @@ class VideoProcessor:
                         "length": info.get('duration', 0),
                         "publish_date": info.get('upload_date', 'Unknown Date'),
                         "thumbnail_url": info.get('thumbnail', ''),
-                        "captions_available": bool(info.get('subtitles', {}))
+                        "captions_available": bool(info.get('subtitles', {})),
+                        "url": url  # Add the URL to the video info
                     }
                 except Exception as e:
                     print(f"Debug - Error in extract_info: {str(e)}")

@@ -1,3 +1,4 @@
+from image import generate_ai_image
 import streamlit as st
 import openai
 import os
@@ -16,6 +17,14 @@ import re
 
 # Load environment variables
 load_dotenv()
+# Define the prompt based on your needs
+prompt = (
+    "A futuristic interface showing AI-driven analysis of YouTube videos and GitHub repositories. "
+    "Include elements like video transcription, smart chapters, content summaries, and repository mapping."
+)
+
+# Call the function to generate the image
+image_path = generate_ai_image(prompt)  
 
 # Verify API key
 api_key = os.getenv("OPENAI_API_KEY")
@@ -27,6 +36,16 @@ if not github_token:
     raise ValueError("GITHUB_TOKEN not found in .env file")
 
 print(f"API key loaded: {api_key[:8]}...")  # Debug only
+
+# Initialize session state variables
+if 'weblink_status' not in st.session_state:
+    st.session_state.weblink_status = None
+if 'weblink_url' not in st.session_state:
+    st.session_state.weblink_url = None
+if 'weblink_error' not in st.session_state:
+    st.session_state.weblink_error = None
+if 'results' not in st.session_state:
+    st.session_state.results = None
 
 # Configure dark theme
 st.set_page_config(
@@ -87,6 +106,13 @@ async def process_video(url, language, processor):
     cached_result = cache_manager.get_cached_result(url)
     if cached_result:
         st.success("Results found in cache!")
+        # Add type field if missing
+        if 'type' not in cached_result:
+            cached_result['type'] = 'youtube'
+        # Handle old cache format for chapters
+        if isinstance(cached_result.get('chapters', {}), dict):
+            if 'chapters' in cached_result['chapters']:
+                cached_result['chapters'] = cached_result['chapters']['chapters']
         return cached_result
     
     progress_text = "Operation in progress. Please wait..."
@@ -123,7 +149,11 @@ async def process_video(url, language, processor):
             my_bar.progress(90, text="Analysis completed")
             
             result = {
-                "info": video_info,
+                "type": "youtube",
+                "info": {
+                    **video_info,
+                    "url": url  # Ensure URL is in the info dictionary
+                },
                 "transcript": transcript,
                 "chapters": content_results["chapters"],
                 "tags": content_results["tags"],
@@ -153,6 +183,10 @@ async def process_github_repo(url: str) -> dict:
         if not readme_content:
             raise Exception("README not found in the repository")
         
+        # Generate an AI image based on the README content
+        image_prompt = f"A visual representation of {owner}/{repo} repository: {readme_content[:200]}"
+        image_path = generate_ai_image(image_prompt, image_name=f"{owner}_{repo}_image.png")
+        
         # Format results
         results = {
             'type': 'github',
@@ -163,6 +197,7 @@ async def process_github_repo(url: str) -> dict:
                 'title': f"{owner}/{repo} README"
             },
             'readme': readme_content,
+            'image_path': image_path,
             'processed_date': datetime.now().isoformat()
         }
         
@@ -174,6 +209,9 @@ async def process_github_repo(url: str) -> dict:
 
 def display_results(results, capacities_handler):
     """Display analysis results"""
+    # Store results in session state
+    st.session_state.results = results
+    
     if results['type'] == 'github':
         # Display README
         st.subheader("Repository README")
@@ -188,6 +226,9 @@ def display_results(results, capacities_handler):
         readme_content = '\n'.join(line for line in readme_content.split('\n') if line.strip())
         
         st.markdown(readme_content)
+        
+        # Display AI image
+        st.image(results['image_path'], caption="AI-generated image based on README content")
         
         # Capacities export section
         st.subheader("Export to Capacities")
@@ -228,7 +269,10 @@ def display_results(results, capacities_handler):
         
         # Chapters
         st.subheader("Video Chapters")
-        for chapter in results["chapters"]["chapters"]:
+        chapters_list = results["chapters"]
+        if isinstance(chapters_list, dict) and "chapters" in chapters_list:
+            chapters_list = chapters_list["chapters"]
+        for chapter in chapters_list:
             with st.expander(f"{chapter['timestamp']} - {chapter['title']}"):
                 st.write(chapter["summary"])
         
@@ -236,39 +280,21 @@ def display_results(results, capacities_handler):
         st.subheader("Generated Tags")
         st.write(" ".join([f"#{tag}" for tag in results["tags"]]))
         
-        # Capacities section
-        st.subheader("Export to Capacities")
-        
-        # Columns for button and status
-        col1, col2 = st.columns([1, 2])
-        
-        def create_weblink():
-            """Function to create weblink and update status"""
-            try:
-                with st.spinner("Creating Weblink in Capacities..."):
-                    weblink = capacities_handler.create_weblink(st.session_state.results)
-                    st.session_state.weblink_status = "success"
-                    st.session_state.weblink_url = weblink['url']
-            except Exception as e:
-                st.session_state.weblink_status = "error"
-                st.session_state.weblink_error = str(e)
-        
-        with col1:
-            # Only show button if no weblink has been successfully created
-            if st.session_state.weblink_status != "success":
-                st.button(
-                    "Create Weblink",
-                    on_click=create_weblink,
-                    key="create_weblink_button"
-                )
-        
-        with col2:
-            # Show status or result as appropriate
-            if st.session_state.weblink_status == "success":
-                st.success("Weblink created successfully!")
-                st.markdown(f"[View in Capacities]({st.session_state.weblink_url})")
-            elif st.session_state.weblink_status == "error":
-                st.error(f"Error creating Weblink: {st.session_state.weblink_error}")
+        # Process in Capacities
+        try:
+            with st.spinner("Processing in Capacities..."):
+                response = capacities_handler.create_weblink(results)
+                if response and isinstance(response, dict):
+                    st.success("Successfully processed in Capacities!")
+                    if 'url' in response:
+                        st.markdown(f"[View in Capacities]({response['url']})")
+                    else:
+                        st.warning("Processing successful but no URL returned")
+                        st.json(response)  # Display the full response for debugging
+        except Exception as e:
+            st.error(f"Error processing in Capacities: {str(e)}")
+            st.error("Debug info:")
+            st.json(results)  # Display the results for debugging
         
         # Transcript and other details
         if 'transcript' in results:
