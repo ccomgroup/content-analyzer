@@ -17,16 +17,8 @@ import re
 
 # Load environment variables
 load_dotenv()
-# Define the prompt based on your needs
-prompt = (
-    "A futuristic interface showing AI-driven analysis of YouTube videos and GitHub repositories. "
-    "Include elements like video transcription, smart chapters, content summaries, and repository mapping."
-)
 
-# Call the function to generate the image
-image_path = generate_ai_image(prompt)  
-
-# Verify API key
+# Verify API keys
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
     raise ValueError("OPENAI_API_KEY not found in .env file")
@@ -46,6 +38,16 @@ if 'weblink_error' not in st.session_state:
     st.session_state.weblink_error = None
 if 'results' not in st.session_state:
     st.session_state.results = None
+if 'api_key' not in st.session_state:
+    st.session_state.api_key = os.getenv("OPENAI_API_KEY", "")
+if 'model_type' not in st.session_state:
+    st.session_state.model_type = "openai"
+if 'ollama_model' not in st.session_state:
+    st.session_state.ollama_model = "llama2"
+
+# Initialize session state for shutdown handling
+if 'should_shutdown' not in st.session_state:
+    st.session_state.should_shutdown = False
 
 # Configure dark theme
 st.set_page_config(
@@ -100,74 +102,49 @@ def extract_github_info(url: str) -> tuple:
 
 async def process_video(url, language, processor):
     """Process the complete video and return results"""
-    cache_manager = CacheManager()
-    
-    # Check cache
-    cached_result = cache_manager.get_cached_result(url)
-    if cached_result:
-        st.success("Results found in cache!")
-        # Add type field if missing
-        if 'type' not in cached_result:
-            cached_result['type'] = 'youtube'
-        # Handle old cache format for chapters
-        if isinstance(cached_result.get('chapters', {}), dict):
-            if 'chapters' in cached_result['chapters']:
-                cached_result['chapters'] = cached_result['chapters']['chapters']
-        return cached_result
-    
-    progress_text = "Operation in progress. Please wait..."
-    my_bar = st.progress(0, text=progress_text)
-    
     try:
-        with st.status("Processing video...", expanded=True) as status:
-            # Get video information
-            status.write("Getting video information...")
-            video_info = processor.get_video_info(url)
-            my_bar.progress(20, text="Video information obtained")
-            
-            # Show preliminary information
-            st.write(f"Processing: {video_info['title']}")
-            st.write(f"Channel: {video_info['author']}")
-            
-            # Try to get YouTube transcript
-            status.write("Getting transcript...")
-            transcript, timestamps = await processor.get_transcript(url)
-            
-            if not transcript:
-                status.write("Downloading and transcribing audio...")
-                # Use previous transcription method
-                audio_path = processor.download_audio(url)
-                transcript = processor.transcribe_audio(audio_path, language)
-                timestamps = None
-                os.remove(audio_path)
-            
-            my_bar.progress(60, text="Transcription completed")
-            
-            # Process content in parallel
-            status.write("Analyzing content...")
-            content_results = await processor.process_content(transcript, timestamps)
-            my_bar.progress(90, text="Analysis completed")
-            
-            result = {
-                "type": "youtube",
-                "info": {
-                    **video_info,
-                    "url": url  # Ensure URL is in the info dictionary
-                },
-                "transcript": transcript,
-                "chapters": content_results["chapters"],
-                "tags": content_results["tags"],
-                "summary": content_results["summary"],
-                "video_url": url,
-                "processed_date": datetime.now().isoformat()
-            }
-            
-            # Save to cache
-            cache_manager.save_to_cache(url, result)
-            my_bar.progress(100, text="Process completed!")
-            
-            return result
-            
+        # Create a progress bar
+        my_bar = st.progress(0, text="Starting video processing...")
+        
+        # Step 1: Extract video information (20%)
+        my_bar.progress(20, text="Extracting video information...")
+        info = processor.get_video_info(url)
+        if not info:
+            raise Exception("Failed to extract video information")
+        
+        # Step 2: Get video transcript (40%)
+        my_bar.progress(40, text="Getting video transcript...")
+        transcript, timestamps = await processor.get_transcript(url, language)
+        if not transcript:
+            raise Exception("Failed to get video transcript")
+        
+        # Step 3: Process transcript (70%)
+        my_bar.progress(70, text="Processing transcript...")
+        content = await processor.process_content(transcript, timestamps)
+        if not content:
+            raise Exception("Failed to process transcript")
+        
+        # Step 4: Format results (100%)
+        my_bar.progress(100, text="Formatting results...")
+        results = {
+            'type': 'youtube',
+            'url': url,
+            'title': info.get('title', ''),
+            'author': info.get('author', ''),
+            'views': info.get('views', 0),
+            'length': info.get('length', 0),
+            'publish_date': info.get('publish_date', ''),
+            'thumbnail_url': info.get('thumbnail_url', ''),
+            'summary': content.get('summary', ''),
+            'chapters': content.get('chapters', []),
+            'tags': content.get('tags', []),
+            'transcript': transcript,
+            'processed_date': datetime.now().isoformat()
+        }
+        
+        my_bar.empty()
+        return results
+        
     except Exception as e:
         my_bar.empty()
         raise e
@@ -183,20 +160,23 @@ async def process_github_repo(url: str) -> dict:
         if not readme_content:
             raise Exception("README not found in the repository")
         
-        # Generate an AI image based on the README content
-        image_prompt = f"A visual representation of {owner}/{repo} repository: {readme_content[:200]}"
+        # Generate abstract art for the repository
+        image_prompt = (
+            "Create an abstract digital artwork merging Van Gogh and Pollock styles. "
+            "Use dynamic swirling patterns, energetic splashes, and bold color harmonies. "
+            "Make it purely abstract - NO text, NO symbols, NO literal representations. "
+            "Style: Modern, expressive, with rich textures and emotional depth. "
+            f"Let the energy reflect the essence of code and creativity."
+        )
         image_path = generate_ai_image(image_prompt, image_name=f"{owner}_{repo}_image.png")
         
         # Format results
         results = {
             'type': 'github',
-            'info': {
-                'owner': owner,
-                'repo': repo,
-                'url': url,
-                'title': f"{owner}/{repo} README"
-            },
-            'readme': readme_content,
+            'repo_name': f"{owner}/{repo}",
+            'url': url,  # Set the original URL
+            'summary': readme_content[:1000],  # Limit summary to 1000 chars
+            'full_content': readme_content,
             'image_path': image_path,
             'processed_date': datetime.now().isoformat()
         }
@@ -213,37 +193,33 @@ def display_results(results, capacities_handler):
     st.session_state.results = results
     
     if results['type'] == 'github':
+        # Display repository name
+        st.subheader(f"Repository: {results['repo_name']}")
+        
         # Display README
         st.subheader("Repository README")
         
         # Clean up HTML tags and convert to markdown
-        readme_content = results['readme']
+        readme_content = results['full_content']
         # Remove HTML image tags and badges
         readme_content = re.sub(r'<img[^>]*>', '', readme_content)
         # Remove other HTML tags but keep their content
         readme_content = re.sub(r'<[^>]+>', '', readme_content)
-        # Remove empty lines created by HTML removal
-        readme_content = '\n'.join(line for line in readme_content.split('\n') if line.strip())
         
         st.markdown(readme_content)
         
-        # Display AI image
-        st.image(results['image_path'], caption="AI-generated image based on README content")
+        # Display the generated image
+        if results.get('image_path'):
+            st.image(results['image_path'], caption="AI-generated visualization of the repository")
         
-        # Capacities export section
-        st.subheader("Export to Capacities")
-        
-        if st.button("Export to Capacities"):
-            try:
-                # Update the README content in results before sending to Capacities
-                results['readme'] = readme_content
-                weblink = capacities_handler.create_weblink(results)
-                
-                if weblink:
-                    st.success("Successfully exported to Capacities!")
-                    st.write(f"Processed on: {results['processed_date']}")
-            except Exception as e:
-                st.error(f"Error exporting to Capacities: {str(e)}")
+        # Export to Capacities
+        try:
+            capacities_response = capacities_handler.create_weblink(results)
+            st.success("Successfully exported to Capacities!")
+            st.json(capacities_response)
+        except Exception as e:
+            st.error(f"Error exporting to Capacities: {str(e)}")
+            print(f"Error processing in Capacities: {str(e)}")
     
     elif results['type'] == 'youtube':
         # Video information
@@ -252,76 +228,88 @@ def display_results(results, capacities_handler):
         col1, col2 = st.columns(2)
         
         with col1:
-            st.image(results["info"]["thumbnail_url"], caption="Video thumbnail")
+            st.image(results["thumbnail_url"], caption="Video thumbnail")
         
         with col2:
             st.subheader("Video Information")
-            st.write(f"**Title:** {results['info']['title']}")
-            st.write(f"**Channel:** {results['info']['author']}")
-            st.write(f"**Views:** {results['info']['views']:,}")
-            st.write(f"**Duration:** {results['info']['length']} seconds")
-            st.write(f"**Publication Date:** {results['info']['publish_date']}")
+            st.write(f"**Title:** {results['title']}")
+            st.write(f"**URL:** {results['url']}")
+            st.write(f"**Author:** {results['author']}")
+            st.write(f"**Views:** {results['views']}")
+            st.write(f"**Length:** {results['length']}")
+            st.write(f"**Publish Date:** {results['publish_date']}")
+            st.write(f"**Summary:** {results['summary']}")
+            st.write(f"**Tags:** {results['tags']}")
         
-        # Summary
-        if "summary" in results:
-            st.subheader("Video Summary")
-            st.write(results["summary"])
-        
-        # Chapters
-        st.subheader("Video Chapters")
-        chapters_list = results["chapters"]
-        if isinstance(chapters_list, dict) and "chapters" in chapters_list:
-            chapters_list = chapters_list["chapters"]
-        for chapter in chapters_list:
-            with st.expander(f"{chapter['timestamp']} - {chapter['title']}"):
-                st.write(chapter["summary"])
-        
-        # Tags
-        st.subheader("Generated Tags")
-        st.write(" ".join([f"#{tag}" for tag in results["tags"]]))
-        
-        # Process in Capacities
-        try:
-            with st.spinner("Processing in Capacities..."):
-                response = capacities_handler.create_weblink(results)
-                if response and isinstance(response, dict):
-                    st.success("Successfully processed in Capacities!")
-                    if 'url' in response:
-                        st.markdown(f"[View in Capacities]({response['url']})")
-                    else:
-                        st.warning("Processing successful but no URL returned")
-                        st.json(response)  # Display the full response for debugging
-        except Exception as e:
-            st.error(f"Error processing in Capacities: {str(e)}")
-            st.error("Debug info:")
-            st.json(results)  # Display the results for debugging
-        
-        # Transcript and other details
-        if 'transcript' in results:
-            with st.expander("Complete Transcript"):
-                st.write(results["transcript"])
+        # Transcript
+        with st.expander("Complete Transcript"):
+            st.write(results["transcript"])
         
         # Processing date
         if "processed_date" in results:
             st.caption(f"Processed on: {results['processed_date']}")
+            
+        # Export to Capacities
+        try:
+            capacities_response = capacities_handler.create_weblink(results)
+            st.success("Successfully exported to Capacities!")
+            st.json(capacities_response)
+        except Exception as e:
+            st.error(f"Error exporting to Capacities: {str(e)}")
+            print(f"Error processing in Capacities: {str(e)}")
 
 async def main():
     st.title("URL Content Analyzer")
     st.write("Analyze YouTube videos or GitHub repositories")
     
+    # Sidebar configuration
+    with st.sidebar:
+        st.title("Settings")
+        
+        # Model Selection
+        st.session_state.model_type = st.radio(
+            "Select Model Type",
+            ["openai", "ollama"],
+            index=0 if st.session_state.model_type == "openai" else 1
+        )
+        
+        if st.session_state.model_type == "openai":
+            api_key = st.text_input("OpenAI API Key", value=st.session_state.api_key, type="password")
+            if api_key != st.session_state.api_key:
+                st.session_state.api_key = api_key
+                if api_key:
+                    os.environ["OPENAI_API_KEY"] = api_key
+                    st.success("API key updated!")
+        else:
+            st.session_state.ollama_model = st.selectbox(
+                "Select Ollama Model",
+                ["llama2", "codellama", "mistral"],
+                index=["llama2", "codellama", "mistral"].index(st.session_state.ollama_model)
+            )
+
+        # Add a shutdown button in the sidebar
+        if st.button("Shutdown Application"):
+            st.session_state.should_shutdown = True
+            st.success("Shutting down... You can close this window.")
+            st.stop()
+
     # Initialize handlers
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = st.session_state.api_key
     capacities_api_key = os.getenv("CAPACITIES_API_KEY")
     
     if not api_key:
-        st.error("OpenAI API key not found in environment variables.")
+        st.error("API key not found. Please enter your API key in the sidebar.")
         return
         
     if not capacities_api_key:
         st.error("Capacities API key not found in environment variables.")
         return
         
-    processor = VideoProcessor(api_key=api_key)
+    processor = VideoProcessor(
+        api_key=api_key,
+        model_type=st.session_state.model_type,
+        ollama_model=st.session_state.ollama_model
+    )
     capacities_handler = CapacitiesHandler(api_key=capacities_api_key)
     
     # URL input
